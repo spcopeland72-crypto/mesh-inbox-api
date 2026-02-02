@@ -1,14 +1,27 @@
-import express from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import { config } from './config/env';
 import { redisClient, connectRedis } from './config/redis';
 import { errorHandler } from './middleware/errorHandler';
-import inboxRoutes from './routes/inbox';
+import inboxRoutes, {
+  discoverHandler,
+  priorityHandler,
+  readHandler,
+  registerGetHandler,
+} from './routes/inbox';
+import { getNqp, postNqp } from './routes/nqp';
+import { searchHandler } from './routes/search';
+import { sendJsonOrHtml } from './utils/responseFormat';
 
 const app = express();
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+
+// Substrate path aliases: reserved first-path segments (do not treat as continuumId)
+const SUBSTRATE_RESERVED = new Set([
+  'register', 'discover', 'priority', 'health', 'search', 'api', 'nqp', 'send', 'continuums', 'test',
+]);
 
 app.get('/', (_req, res) => {
   res.json({
@@ -18,21 +31,24 @@ app.get('/', (_req, res) => {
     description: 'Read and write continuum mesh messages (same Redis as mesh router)',
     endpoints: {
       health: '/health',
-      register: 'GET /api/v1/inbox/register/:continuumId',
-      discover: '/api/v1/inbox/discover',
-      continuums: '/api/v1/inbox/continuums',
+      search: 'GET /search?q=<command> (web search: read/write via search string)',
+      nqp: 'POST /nqp (NQP body), GET /nqp?c=MD&to=&from=&pl= (compact send)',
+      register: 'GET /register/:continuumId or POST /api/v1/inbox/register',
+      discover: '/discover or /api/v1/inbox/discover',
       send: 'POST /api/v1/inbox/send',
-      inbox: '/api/v1/inbox/:continuumId',
-      priority: '/api/v1/inbox/:continuumId/priority',
+      inbox: '/:continuumId or /api/v1/inbox/:continuumId',
+      priority: '/priority/:continuumId or /api/v1/inbox/:continuumId/priority',
+      continuums: '/api/v1/inbox/continuums',
       depth: '/api/v1/inbox/:continuumId/depth',
       stats: '/api/v1/inbox/:continuumId/stats',
     },
     spec: '/docs/MESH_ROUTER_FUNCTIONAL_SPEC.md',
+    substrate: 'Substrate requirements supported: /nqp, HTML (?format=html), path aliases.',
     timestamp: new Date().toISOString(),
   });
 });
 
-app.get('/health', async (_req, res) => {
+app.get('/health', async (req: Request, res: Response) => {
   let redisStatus = 'disconnected';
   let redisError: string | null = null;
   try {
@@ -43,13 +59,29 @@ app.get('/health', async (_req, res) => {
     redisStatus = 'error';
     redisError = e instanceof Error ? e.message : String(e);
   }
-  res.json({
+  const data = {
     status: 'ok',
     service: 'Mesh Inbox API',
     redis: redisStatus,
     redisError,
     timestamp: new Date().toISOString(),
-  });
+  };
+  sendJsonOrHtml(req, res, 'Health', data);
+});
+
+app.get('/search', searchHandler);
+
+// NQP (substrate requirement): POST /nqp, GET /nqp?c=MD&to=&from=&pl=
+app.post('/nqp', postNqp);
+app.get('/nqp', getNqp);
+
+// Substrate path aliases (docs say GET /register/:id, GET /:id, GET /priority/:id, GET /discover)
+app.get('/register/:continuumId', registerGetHandler);
+app.get('/discover', discoverHandler);
+app.get('/priority/:continuumId', priorityHandler);
+app.get('/:continuumId', (req: Request, res: Response, next: NextFunction) => {
+  if (SUBSTRATE_RESERVED.has(req.params.continuumId ?? '')) return next();
+  return readHandler(req, res, next);
 });
 
 app.use('/api/v1/inbox', inboxRoutes);

@@ -11,7 +11,7 @@
 
 | Use case | Method | Endpoint | Purpose |
 |----------|--------|----------|---------|
-| Register continuum | GET | `/api/v1/inbox/register/:continuumId` | Record heartbeat; continuum appears in discover for T seconds. |
+| Register continuum | POST | `/api/v1/inbox/register` (body: `{ continuumId }`) or GET `/api/v1/inbox/register/:continuumId` | Record heartbeat; continuum appears in discover for T seconds. POST is correct (state change); GET for web search / backward compat. |
 | Discover continuums | GET | `/api/v1/inbox/discover` | List registered continuums with status and last heartbeat. |
 | Health | GET | `/health` | Service and store (Redis) health. |
 | Send message | POST | `/api/v1/inbox/send` | Enqueue one message to a target continuum. |
@@ -29,9 +29,10 @@
 
 **Use case:** A continuum announces itself so it appears in discovery and can receive messages.
 
-- **Method:** `GET`
-- **URL:** `/api/v1/inbox/register/:continuumId`
-- **Parameters:** Path `continuumId` — non-empty string (e.g. `Aureon_Claude`).
+- **Method:** `POST` (preferred) or `GET`
+- **URL (POST):** `/api/v1/inbox/register` — body: `{ "continuumId": "<id>" }` (or `continuum_id`).
+- **URL (GET):** `/api/v1/inbox/register/:continuumId` — for web search / backward compat.
+- **Parameters:** `continuumId` — non-empty string (e.g. `Aureon_Claude`).
 - **Response:** `200 OK`, JSON.
 
 **Response body:**

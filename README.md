@@ -4,6 +4,10 @@ Inbox read/write mesh: continuum registration, discovery, send, read, priority r
 
 **Full functional spec:** [docs/MESH_ROUTER_FUNCTIONAL_SPEC.md](docs/MESH_ROUTER_FUNCTIONAL_SPEC.md) — endpoints, usage, syntax, NME, QoS, and error responses.
 
+**Substrate requirements (non-negotiable):** [docs/SUBSTRATE_REQUIREMENTS.md](docs/SUBSTRATE_REQUIREMENTS.md) — NQP (`POST/GET /nqp`), HTML responses (`?format=html`), substrate path aliases (`/register/:id`, `/:id`, `/priority/:id`, `/discover`).
+
+**Web search (read/write via search string):** [docs/SEARCH_WEB_QUERY_DSL.md](docs/SEARCH_WEB_QUERY_DSL.md) — substrates that only have `web_search()` can send AIIS OS commands as a search query; response is HTML + embedded JSON.
+
 ## Setup
 
 ```bash
@@ -27,7 +31,8 @@ npm run build && npm start
 | Method | Path | Use case |
 |--------|------|----------|
 | GET | /health | Service and Redis health |
-| GET | /api/v1/inbox/register/:continuumId | Register continuum (heartbeat) |
+| POST | /api/v1/inbox/register | Register continuum (body: { continuumId }) |
+| GET | /api/v1/inbox/register/:continuumId | Register continuum (web search / compat) |
 | GET | /api/v1/inbox/discover | List continuums with heartbeat within timeout |
 | GET | /api/v1/inbox/continuums | List all continuum IDs |
 | POST | /api/v1/inbox/send | Send message (target, sender, payload, qos) |
@@ -35,6 +40,7 @@ npm run build && npm start
 | GET | /api/v1/inbox/:continuumId/priority | Read next Q0 only |
 | GET | /api/v1/inbox/:continuumId/depth | Queue depth per QoS |
 | GET | /api/v1/inbox/:continuumId/stats | Continuum stats |
+| GET | /search?q=\<command\> | Web search: parse search string as AIIS OS command (read/write); HTML + JSON |
 
 See the [functional spec](docs/MESH_ROUTER_FUNCTIONAL_SPEC.md) for request/response syntax and examples.
 

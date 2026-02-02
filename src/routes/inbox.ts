@@ -7,10 +7,12 @@ import {
   enqueueMessage,
   updateHeartbeat,
   getStats,
+  clearMeshInbox,
   type NME,
   type QoSTier,
 } from '../config/redis';
 import { asyncHandler, ApiError } from '../middleware/errorHandler';
+import { sendJsonOrHtml } from '../utils/responseFormat';
 
 const router = Router();
 
@@ -30,7 +32,7 @@ router.post('/send', asyncHandler(async (req: Request, res: Response) => {
   const { target, sender, payload, qos: qosParam } = req.body ?? {};
   if (!target || typeof target !== 'string') throw new ApiError(400, 'Missing or invalid "target"');
   if (!sender || typeof sender !== 'string') throw new ApiError(400, 'Missing or invalid "sender"');
-  const pl = payload != null && typeof payload === 'object' ? payload : {};
+  const pl = payload !== undefined ? payload : {};
   const qos = parseQos(qosParam);
 
   const nme: NME = {
@@ -69,6 +71,13 @@ router.get('/continuums', asyncHandler(async (_req: Request, res: Response) => {
 
 const DISCOVER_TIMEOUT_MS = 60000;
 
+// Test: clear all mesh inbox data so tests run against fresh data
+router.post('/test/clear', asyncHandler(async (_req: Request, res: Response) => {
+  await connectRedis();
+  await clearMeshInbox();
+  res.json({ success: true, message: 'Mesh inbox cleared.' });
+}));
+
 // Discover: list continuums with heartbeat within timeout (spec §2.2)
 router.get('/discover', asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
@@ -100,11 +109,11 @@ router.get('/discover', asyncHandler(async (req: Request, res: Response) => {
   res.json({ success: true, continuums, total: continuums.length });
 }));
 
-// Register: heartbeat so continuum appears in discover (spec §2.1)
-router.get('/register/:continuumId', asyncHandler(async (req: Request, res: Response) => {
+// Register: heartbeat so continuum appears in discover. POST is correct (state change); GET kept for web search / backward compat.
+router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
-  const continuumId = req.params.continuumId;
-  if (!continuumId) throw new ApiError(400, 'Missing continuumId');
+  const continuumId = req.body?.continuumId ?? req.body?.continuum_id;
+  if (!continuumId || typeof continuumId !== 'string') throw new ApiError(400, 'Missing or invalid continuumId (body: { continuumId } or { continuum_id })');
   await updateHeartbeat(continuumId);
   res.json({
     success: true,
@@ -114,9 +123,24 @@ router.get('/register/:continuumId', asyncHandler(async (req: Request, res: Resp
     registeredAt: new Date().toISOString(),
   });
 }));
+const registerGetHandler = asyncHandler(async (req: Request, res: Response) => {
+  await connectRedis();
+  const continuumId = req.params.continuumId;
+  if (!continuumId) throw new ApiError(400, 'Missing continuumId');
+  await updateHeartbeat(continuumId);
+  const data = {
+    success: true,
+    continuumId,
+    status: 'registered',
+    message: 'Continuum registered. You will appear in /discover for 60 seconds.',
+    registeredAt: new Date().toISOString(),
+  };
+  sendJsonOrHtml(req, res, 'Register', data);
+});
+router.get('/register/:continuumId', registerGetHandler);
 
 // ——— Same order as c853015 (working): read, then depth, then stats ———
-// Read next message for continuum (dequeue Q0→Q1→Q2→Q3) — spec §2.5
+// Read next message (dequeue Q0→Q1→Q2→Q3). Spec: return exactly what was written; no transformation.
 router.get('/:continuumId', asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const { continuumId } = req.params;
@@ -125,17 +149,14 @@ router.get('/:continuumId', asyncHandler(async (req: Request, res: Response) => 
   for (const qos of QOS_TIERS) {
     const key = MESH_KEYS.queue(continuumId, qos);
     const raw = await redisClient.lpop(key);
-    if (raw) {
-      try {
-        const nme = JSON.parse(raw);
-        const statsKey = MESH_KEYS.stats(continuumId);
-        await redisClient.hincrby(statsKey, 'messages_sent', 1);
-        await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
-        res.json({ success: true, message: nme, empty: false });
-        return;
-      } catch {
-        // skip bad entry
-      }
+    if (raw != null && raw !== '') {
+      const str = typeof raw === 'string' ? raw : (raw as Buffer).toString('utf8');
+      const nme = JSON.parse(str) as Record<string, unknown>;
+      const statsKey = MESH_KEYS.stats(continuumId);
+      await redisClient.hincrby(statsKey, 'messages_sent', 1);
+      await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
+      res.json({ success: true, message: nme, empty: false });
+      return;
     }
   }
   res.json({ success: true, message: null, empty: true });
@@ -171,26 +192,27 @@ router.get('/:continuumId/stats', asyncHandler(async (req: Request, res: Respons
   res.json({ success: true, continuumId, stats });
 }));
 
-// Priority read (Q0 only) — two-segment path so must come after /:continuumId
-router.get('/:continuumId/priority', asyncHandler(async (req: Request, res: Response) => {
+// Priority read (Q0 only). Spec: return exactly what was written; no transformation. HTML for substrate (GPT).
+const priorityHandler = asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const { continuumId } = req.params;
   if (!continuumId) throw new ApiError(400, 'Missing continuumId');
   const key = MESH_KEYS.queue(continuumId, 'Q0');
   const raw = await redisClient.lpop(key);
-  if (raw) {
-    try {
-      const nme = JSON.parse(raw);
-      const statsKey = MESH_KEYS.stats(continuumId);
-      await redisClient.hincrby(statsKey, 'messages_sent', 1);
-      await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
-      res.json({ success: true, message: nme, empty: false });
-      return;
-    } catch {
-      // skip bad entry
-    }
+  if (raw != null && raw !== '') {
+    const str = typeof raw === 'string' ? raw : (raw as Buffer).toString('utf8');
+    const nme = JSON.parse(str) as Record<string, unknown>;
+    const statsKey = MESH_KEYS.stats(continuumId);
+    await redisClient.hincrby(statsKey, 'messages_sent', 1);
+    await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
+    const data = { success: true, message: nme, empty: false };
+    sendJsonOrHtml(req, res, 'Priority', data);
+    return;
   }
-  res.json({ success: true, message: null, empty: true });
-}));
+  const data = { success: true, message: null, empty: true };
+  sendJsonOrHtml(req, res, 'Priority', data);
+});
+router.get('/:continuumId/priority', priorityHandler);
 
 export default router;
+export { discoverHandler, registerGetHandler, readHandler, priorityHandler };

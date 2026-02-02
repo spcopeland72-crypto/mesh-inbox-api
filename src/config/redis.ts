@@ -101,7 +101,7 @@ export interface NME {
   urgency: string;
   qos: QoSTier;
   risk_level: string;
-  payload: Record<string, unknown>;
+  payload: unknown; // arbitrary JSON: string (e.g. script), object, array, etc.; recipient gets exact copy
   session_id?: string;
   correlation_id?: string;
   ttl?: number;
@@ -128,6 +128,21 @@ export async function updateHeartbeat(continuumId: string): Promise<void> {
   const statsKey = MESH_KEYS.stats(continuumId);
   await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
   await redisClient.hset(statsKey, 'status', 'online');
+}
+
+/** Clear all mesh inbox data (queues, stats, continuums set). For test use. */
+export async function clearMeshInbox(): Promise<void> {
+  const ids = await redisClient.smembers(MESH_KEYS.continuumsSet());
+  for (const id of ids) {
+    await redisClient.del(
+      MESH_KEYS.queue(id, 'Q0'),
+      MESH_KEYS.queue(id, 'Q1'),
+      MESH_KEYS.queue(id, 'Q2'),
+      MESH_KEYS.queue(id, 'Q3'),
+      MESH_KEYS.stats(id)
+    );
+  }
+  await redisClient.del(MESH_KEYS.continuumsSet());
 }
 
 /** Get stats for one continuum; null if none. */

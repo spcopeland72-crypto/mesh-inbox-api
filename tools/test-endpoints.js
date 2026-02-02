@@ -7,8 +7,9 @@
  */
 
 const BASE = process.env.MESH_INBOX_URL || process.argv[2] || 'https://mesh-inbox-api.vercel.app';
-const CONT_A = 'TestContinuum_Alpha';
-const CONT_B = 'TestContinuum_Beta';
+const RUN_ID = Date.now();
+const CONT_A = `TestContinuum_Alpha_${RUN_ID}`;
+const CONT_B = `TestContinuum_Beta_${RUN_ID}`;
 
 let passed = 0;
 let failed = 0;
@@ -49,6 +50,16 @@ async function post(path, data) {
 async function run() {
   console.log(`\nMesh Inbox API – data tests\nBase: ${BASE}\n`);
 
+  // --- Clear test database ---
+  console.log('0. Clear mesh inbox (fresh test data)');
+  try {
+    const clearRes = await post('/api/v1/inbox/test/clear', {});
+    ok('clear status', clearRes.status === 200);
+    ok('clear success', clearRes.body && clearRes.body.success === true);
+  } catch (e) {
+    fail('clear', e);
+  }
+
   // --- Health ---
   console.log('1. Health');
   try {
@@ -68,7 +79,7 @@ async function run() {
   // --- Register ---
   console.log('\n2. Register continuums');
   try {
-    const ra = await get(`/api/v1/inbox/register/${CONT_A}`);
+    const ra = await post('/api/v1/inbox/register', { continuumId: CONT_A });
     ok('register A status', ra.status === 200);
     if (ra.status !== 200) console.log(`    Register A response: ${ra.status} ${JSON.stringify(ra.body).slice(0, 200)}`);
     ok('register A success', ra.body && ra.body.success === true);
@@ -76,7 +87,7 @@ async function run() {
     ok('register A status registered', ra.body && ra.body.status === 'registered');
     ok('register A registeredAt', ra.body && ra.body.registeredAt);
 
-    const rb = await get(`/api/v1/inbox/register/${CONT_B}`);
+    const rb = await post('/api/v1/inbox/register', { continuumId: CONT_B });
     ok('register B status', rb.status === 200);
     ok('register B continuumId', rb.body && rb.body.continuumId === CONT_B);
   } catch (e) {

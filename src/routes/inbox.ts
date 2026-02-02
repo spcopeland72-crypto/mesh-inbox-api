@@ -5,6 +5,8 @@ import {
   MESH_KEYS,
   QOS_TIERS,
   enqueueMessage,
+  updateHeartbeat,
+  getStats,
   type NME,
   type QoSTier,
 } from '../config/redis';
@@ -65,7 +67,56 @@ router.get('/continuums', asyncHandler(async (_req: Request, res: Response) => {
   return;
 }));
 
-// Read next message for continuum (dequeue, same as mesh router). Q0 > Q1 > Q2 > Q3
+const DISCOVER_TIMEOUT_MS = 60000;
+
+// Discover: list continuums with heartbeat within timeout (spec §2.2)
+router.get('/discover', asyncHandler(async (req: Request, res: Response) => {
+  await connectRedis();
+  const timeoutMs = Math.min(
+    Math.max(parseInt(String(req.query.timeoutMs), 10) || DISCOVER_TIMEOUT_MS, 1000),
+    300000
+  );
+  const now = Date.now();
+  const ids = await redisClient.smembers(MESH_KEYS.continuumsSet());
+  const continuums: Array<{
+    continuumId: string;
+    status: string;
+    last_heartbeat: string;
+    messages_sent: number;
+    messages_received: number;
+  }> = [];
+  for (const id of ids) {
+    const stats = await getStats(id);
+    if (!stats) continue;
+    if (now - stats.last_heartbeat > timeoutMs) continue;
+    continuums.push({
+      continuumId: id,
+      status: stats.status,
+      last_heartbeat: new Date(stats.last_heartbeat).toISOString(),
+      messages_sent: stats.messages_sent,
+      messages_received: stats.messages_received,
+    });
+  }
+  res.json({ success: true, continuums, total: continuums.length });
+}));
+
+// Register: heartbeat so continuum appears in discover (spec §2.1)
+router.get('/register/:continuumId', asyncHandler(async (req: Request, res: Response) => {
+  await connectRedis();
+  const continuumId = req.params.continuumId;
+  if (!continuumId) throw new ApiError(400, 'Missing continuumId');
+  await updateHeartbeat(continuumId);
+  res.json({
+    success: true,
+    continuumId,
+    status: 'registered',
+    message: 'Continuum registered. You will appear in /discover for 60 seconds.',
+    registeredAt: new Date().toISOString(),
+  });
+}));
+
+// ——— Same order as c853015 (working): read, then depth, then stats ———
+// Read next message for continuum (dequeue Q0→Q1→Q2→Q3) — spec §2.5
 router.get('/:continuumId', asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const { continuumId } = req.params;
@@ -90,7 +141,7 @@ router.get('/:continuumId', asyncHandler(async (req: Request, res: Response) => 
   res.json({ success: true, message: null, empty: true });
 }));
 
-// Queue depth per QoS (no dequeue)
+// Queue depth per QoS (no dequeue) — same as c853015
 router.get('/:continuumId/depth', asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const { continuumId } = req.params;
@@ -103,12 +154,11 @@ router.get('/:continuumId/depth', asyncHandler(async (req: Request, res: Respons
   res.json({ success: true, continuumId, depth });
 }));
 
-// Stats for continuum (from stats:{continuumId} hash)
+// Stats for continuum — same inline hgetall as c853015 (no getStats)
 router.get('/:continuumId/stats', asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const { continuumId } = req.params;
   if (!continuumId) throw new ApiError(400, 'Missing continuumId');
-
   const raw = await redisClient.hgetall(MESH_KEYS.stats(continuumId));
   const stats = Object.keys(raw).length
     ? {
@@ -119,6 +169,28 @@ router.get('/:continuumId/stats', asyncHandler(async (req: Request, res: Respons
       }
     : null;
   res.json({ success: true, continuumId, stats });
+}));
+
+// Priority read (Q0 only) — two-segment path so must come after /:continuumId
+router.get('/:continuumId/priority', asyncHandler(async (req: Request, res: Response) => {
+  await connectRedis();
+  const { continuumId } = req.params;
+  if (!continuumId) throw new ApiError(400, 'Missing continuumId');
+  const key = MESH_KEYS.queue(continuumId, 'Q0');
+  const raw = await redisClient.lpop(key);
+  if (raw) {
+    try {
+      const nme = JSON.parse(raw);
+      const statsKey = MESH_KEYS.stats(continuumId);
+      await redisClient.hincrby(statsKey, 'messages_sent', 1);
+      await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
+      res.json({ success: true, message: nme, empty: false });
+      return;
+    } catch {
+      // skip bad entry
+    }
+  }
+  res.json({ success: true, message: null, empty: true });
 }));
 
 export default router;

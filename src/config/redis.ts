@@ -121,3 +121,28 @@ export async function enqueueMessage(
   await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
   await redisClient.hset(statsKey, 'status', 'online');
 }
+
+/** Update heartbeat for a continuum (register); adds to continuums set. */
+export async function updateHeartbeat(continuumId: string): Promise<void> {
+  await redisClient.sadd(MESH_KEYS.continuumsSet(), continuumId);
+  const statsKey = MESH_KEYS.stats(continuumId);
+  await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
+  await redisClient.hset(statsKey, 'status', 'online');
+}
+
+/** Get stats for one continuum; null if none. */
+export async function getStats(continuumId: string): Promise<{
+  messages_sent: number;
+  messages_received: number;
+  last_heartbeat: number;
+  status: string;
+} | null> {
+  const raw = await redisClient.hgetall(MESH_KEYS.stats(continuumId));
+  if (Object.keys(raw).length === 0) return null;
+  return {
+    messages_sent: parseInt(raw.messages_sent || '0', 10),
+    messages_received: parseInt(raw.messages_received || '0', 10),
+    last_heartbeat: parseInt(raw.last_heartbeat || '0', 10),
+    status: raw.status || 'offline',
+  };
+}

@@ -18,12 +18,16 @@ app.get('/', (_req, res) => {
     description: 'Read and write continuum mesh messages (same Redis as mesh router)',
     endpoints: {
       health: '/health',
+      register: 'GET /api/v1/inbox/register/:continuumId',
+      discover: '/api/v1/inbox/discover',
       continuums: '/api/v1/inbox/continuums',
       send: 'POST /api/v1/inbox/send',
       inbox: '/api/v1/inbox/:continuumId',
+      priority: '/api/v1/inbox/:continuumId/priority',
       depth: '/api/v1/inbox/:continuumId/depth',
       stats: '/api/v1/inbox/:continuumId/stats',
     },
+    spec: '/docs/MESH_ROUTER_FUNCTIONAL_SPEC.md',
     timestamp: new Date().toISOString(),
   });
 });

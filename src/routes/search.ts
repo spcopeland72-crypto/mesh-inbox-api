@@ -116,10 +116,12 @@ export const searchHandler = asyncHandler(async (req: Request, res: Response) =>
     };
     if (formatJson) {
       res.setHeader('Content-Type', 'application/json');
-      return res.json(fallback);
+      res.json(fallback);
+      return;
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(htmlWrap('Search command syntax', fallback));
+    res.send(htmlWrap('Search command syntax', fallback));
+    return;
   }
 
   const base = getBaseUrl(req);
@@ -257,7 +259,8 @@ export const searchHandler = asyncHandler(async (req: Request, res: Response) =>
 
   if (formatJson) {
     res.setHeader('Content-Type', 'application/json');
-    return res.json(result);
+    res.json(result);
+    return;
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(htmlWrap(`${parsed.operation} – result`, result));

@@ -37,8 +37,18 @@ async function get(path) {
   return { status: res.status, body };
 }
 
+async function getHtml(path) {
+  const url = path.startsWith('http') ? path : `${BASE}${path}`;
+  const res = await fetch(url);
+  const text = await res.text();
+  const jsonMatch = text.match(/<pre id="newton-packet-out"[^>]*>([\s\S]*?)<\/pre>/);
+  const body = jsonMatch ? (() => { try { return JSON.parse(jsonMatch[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')); } catch { return null; } })() : null;
+  return { status: res.status, text, body };
+}
+
 async function post(path, data) {
-  const res = await fetch(`${BASE}${path}`, {
+  const url = path.startsWith('http') ? path : `${BASE}${path}`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -165,6 +175,18 @@ async function run() {
     fail('read', e);
   }
 
+  // --- Read second message (from NQP) ---
+  console.log('\n6b. Read second message (from NQP)');
+  try {
+    const { status, body } = await get(`/api/v1/inbox/${CONT_B}`);
+    ok('read second status', status === 200);
+    ok('read second message present', body && body.message != null && !body.empty);
+    ok('read second message.sender', body && body.message && body.message.sender === CONT_A);
+    ok('read second message.payload.nqp', body && body.message && body.message.payload && body.message.payload.nqp === true);
+  } catch (e) {
+    fail('read second (NQP)', e);
+  }
+
   // --- Read empty ---
   console.log('\n7. Read (empty)');
   try {
@@ -240,6 +262,119 @@ async function run() {
     ok('send 400 error message', body && body.error && typeof body.error === 'string');
   } catch (e) {
     fail('send 400', e);
+  }
+
+  // --- Root GET / ---
+  console.log('\n13. Root GET /');
+  try {
+    const { status, body } = await get('/');
+    ok('root status', status === 200);
+    ok('root service', body && body.service === 'Mesh Inbox API');
+    ok('root endpoints', body && body.endpoints && typeof body.endpoints.health === 'string');
+    ok('root endpoints.nqp', body && body.endpoints && body.endpoints.nqp);
+  } catch (e) {
+    fail('root', e);
+  }
+
+  // --- GET /nqp compact (c=MD&to=&from=&pl=) ---
+  console.log('\n14. GET /nqp compact send');
+  const compactPayload = encodeURIComponent(JSON.stringify({ text: 'CompactHello' }));
+  try {
+    const res = await fetch(`${BASE}/nqp?c=MD&to=${encodeURIComponent(CONT_B)}&from=${encodeURIComponent(CONT_A)}&pl=${compactPayload}`);
+    const body = await res.json().catch(() => null);
+    ok('nqp GET status', res.status === 200);
+    ok('nqp GET success', body && body.success === true);
+    ok('nqp GET data.target', body && body.data && body.data.target === CONT_B);
+    const readRes = await get(`/api/v1/inbox/${CONT_B}`);
+    ok('nqp GET message received', readRes.body && readRes.body.message && (readRes.body.message.payload?.text === 'CompactHello' || (readRes.body.message.payload && readRes.body.message.payload.text === 'CompactHello')));
+  } catch (e) {
+    fail('GET /nqp compact', e);
+  }
+
+  // --- Substrate path aliases ---
+  console.log('\n15. Substrate alias GET /register/:continuumId');
+  try {
+    const { status, body } = await get(`/register/${CONT_A}`);
+    ok('alias register status', status === 200);
+    ok('alias register success', body && body.success === true);
+    ok('alias register continuumId', body && body.continuumId === CONT_A);
+  } catch (e) {
+    fail('alias register', e);
+  }
+
+  console.log('\n16. Substrate alias GET /discover');
+  try {
+    const { status, body } = await get('/discover');
+    ok('alias discover status', status === 200);
+    ok('alias discover success', body && body.success === true);
+    ok('alias discover continuums array', body && Array.isArray(body.continuums));
+  } catch (e) {
+    fail('alias discover', e);
+  }
+
+  console.log('\n17. Substrate alias GET /:continuumId (read)');
+  try {
+    const { status, body } = await get(`/${CONT_B}`);
+    ok('alias read status', status === 200);
+    ok('alias read success', body && body.success === true);
+    ok('alias read empty (already read)', body && body.empty === true);
+  } catch (e) {
+    fail('alias read', e);
+  }
+
+  console.log('\n18. Substrate alias GET /priority/:continuumId');
+  try {
+    const { status, body } = await get(`/priority/${CONT_B}`);
+    ok('alias priority status', status === 200);
+    ok('alias priority success', body && body.success === true);
+  } catch (e) {
+    fail('alias priority', e);
+  }
+
+  // --- HTML response (?format=html) ---
+  console.log('\n19. HTML response GET /health?format=html');
+  try {
+    const { status, text, body } = await getHtml('/health?format=html');
+    ok('health HTML status', status === 200);
+    ok('health HTML has newton-packet-out', text && text.includes('newton-packet-out'));
+    ok('health HTML parsed body.status', body && body.status === 'ok');
+  } catch (e) {
+    fail('health HTML', e);
+  }
+
+  // --- Search (web search DSL) ---
+  console.log('\n20. Search SYS.HEALTH');
+  try {
+    const res = await fetch(`${BASE}/search?q=mesh-inbox%20%22SYS.HEALTH%22%20%22%22&format=json`);
+    const body = await res.json().catch(() => null);
+    ok('search health status', res.status === 200);
+    ok('search health command', body && (body.command === 'SYS.HEALTH' || body.data?.status === 'ok'));
+    ok('search health data', body && body.data);
+  } catch (e) {
+    fail('search SYS.HEALTH', e);
+  }
+
+  console.log('\n21. Search MESH.DISPATCH (write)');
+  try {
+    const q = encodeURIComponent(`mesh-inbox "MESH.DISPATCH" "to:${CONT_B} from:${CONT_A} message:SearchTest"`);
+    const res = await fetch(`${BASE}/search?q=${q}&format=json`);
+    const body = await res.json().catch(() => null);
+    ok('search dispatch status', res.status === 200);
+    ok('search dispatch executed', body && (body.status === 'executed' || body.data?.success === true));
+  } catch (e) {
+    fail('search MESH.DISPATCH', e);
+  }
+
+  console.log('\n22. Search MESH.POLL (read)');
+  try {
+    const q = encodeURIComponent(`mesh-inbox "MESH.POLL" "continuum_id:${CONT_B}"`);
+    const res = await fetch(`${BASE}/search?q=${q}&format=json`);
+    const body = await res.json().catch(() => null);
+    ok('search poll status', res.status === 200);
+    ok('search poll executed', body && body.status === 'executed');
+    ok('search poll data', body && body.data);
+  } catch (e) {
+    fail('search MESH.POLL', e);
   }
 
   // --- Summary ---

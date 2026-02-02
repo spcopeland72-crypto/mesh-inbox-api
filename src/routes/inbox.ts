@@ -78,8 +78,8 @@ router.post('/test/clear', asyncHandler(async (_req: Request, res: Response) => 
   res.json({ success: true, message: 'Mesh inbox cleared.' });
 }));
 
-// Discover: list continuums with heartbeat within timeout (spec §2.2)
-router.get('/discover', asyncHandler(async (req: Request, res: Response) => {
+// Discover: list continuums with heartbeat within timeout (spec §2.2). HTML for substrate (GPT).
+const discoverHandler = asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const timeoutMs = Math.min(
     Math.max(parseInt(String(req.query.timeoutMs), 10) || DISCOVER_TIMEOUT_MS, 1000),
@@ -106,8 +106,10 @@ router.get('/discover', asyncHandler(async (req: Request, res: Response) => {
       messages_received: stats.messages_received,
     });
   }
-  res.json({ success: true, continuums, total: continuums.length });
-}));
+  const data = { success: true, continuums, total: continuums.length };
+  sendJsonOrHtml(req, res, 'Discover', data);
+});
+router.get('/discover', discoverHandler);
 
 // Register: heartbeat so continuum appears in discover. POST is correct (state change); GET kept for web search / backward compat.
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
@@ -140,8 +142,8 @@ const registerGetHandler = asyncHandler(async (req: Request, res: Response) => {
 router.get('/register/:continuumId', registerGetHandler);
 
 // ——— Same order as c853015 (working): read, then depth, then stats ———
-// Read next message (dequeue Q0→Q1→Q2→Q3). Spec: return exactly what was written; no transformation.
-router.get('/:continuumId', asyncHandler(async (req: Request, res: Response) => {
+// Read next message (dequeue Q0→Q1→Q2→Q3). Spec: return exactly what was written; no transformation. HTML for substrate (GPT).
+const readHandler = asyncHandler(async (req: Request, res: Response) => {
   await connectRedis();
   const { continuumId } = req.params;
   if (!continuumId) throw new ApiError(400, 'Missing continuumId');
@@ -155,12 +157,15 @@ router.get('/:continuumId', asyncHandler(async (req: Request, res: Response) => 
       const statsKey = MESH_KEYS.stats(continuumId);
       await redisClient.hincrby(statsKey, 'messages_sent', 1);
       await redisClient.hset(statsKey, 'last_heartbeat', Date.now().toString());
-      res.json({ success: true, message: nme, empty: false });
+      const data = { success: true, message: nme, empty: false };
+      sendJsonOrHtml(req, res, 'Inbox', data);
       return;
     }
   }
-  res.json({ success: true, message: null, empty: true });
-}));
+  const data = { success: true, message: null, empty: true };
+  sendJsonOrHtml(req, res, 'Inbox', data);
+});
+router.get('/:continuumId', readHandler);
 
 // Queue depth per QoS (no dequeue) — same as c853015
 router.get('/:continuumId/depth', asyncHandler(async (req: Request, res: Response) => {

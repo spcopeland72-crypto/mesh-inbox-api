@@ -8,6 +8,7 @@ import { Request, Response } from 'express';
 import {
   connectRedis,
   enqueueMessage,
+  redisClient,
   QOS_TIERS,
   type NME,
   type QoSTier,
@@ -80,7 +81,6 @@ export const postNqp = asyncHandler(async (req: Request, res: Response) => {
   }
 
   if (cmd === 'SYS.HEALTH') {
-    const { redisClient } = await import('../config/redis');
     let redisStatus = 'disconnected';
     try {
       const pong = await redisClient.ping();
